@@ -1,0 +1,1517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI智能助手 - 本地存储版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * { scrollbar-width: thin; scrollbar-color: #4B5563 #1F2937; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1F2937; }
+        ::-webkit-scrollbar-thumb { background: #4B5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6B7280; }
+        
+        .message-bubble { animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .typing-indicator::after {
+            content: '';
+            animation: typing 1.5s infinite;
+        }
+        @keyframes typing {
+            0%, 100% { content: ''; }
+            25% { content: '.'; }
+            50% { content: '..'; }
+            75% { content: '...'; }
+        }
+        
+        .file-item:hover { background-color: rgba(59, 130, 246, 0.1); }
+        .file-item.selected { background-color: rgba(59, 130, 246, 0.2); border-left: 3px solid #3B82F6; }
+        
+        .modal-overlay { backdrop-filter: blur(5px); }
+        
+        .chat-message-checkbox:checked + .message-content {
+            background-color: rgba(59, 130, 246, 0.1);
+            border: 2px solid #3B82F6;
+        }
+        
+        .path-breadcrumb:hover { color: #3B82F6; cursor: pointer; text-decoration: underline; }
+        
+        .preview-container {
+            background: white;
+            color: black;
+            padding: 20px;
+            border-radius: 8px;
+            max-height: 70vh;
+            overflow: auto;
+        }
+        
+        .preview-container pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        
+        .preview-container code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+        
+        .preview-container table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        .preview-container th, .preview-container td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        
+        .preview-container th { background-color: #f4f4f4; }
+        
+        .image-preview-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .image-preview-container img {
+            max-width: 100%;
+            max-height: 70vh;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-screen overflow-hidden">
+    <!-- 新建文件夹弹窗 -->
+    <div id="newFolderModal" class="hidden fixed inset-0 bg-black/50 modal-overlay z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-xl w-full max-w-md overflow-hidden">
+            <header class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="font-bold text-lg"><i class="fas fa-folder-plus mr-2 text-blue-400"></i>新建文件夹</h3>
+                <button onclick="closeNewFolderModal()" class="text-gray-400 hover:text-white"><i class="fas fa-times text-xl"></i></button>
+            </header>
+            <div class="p-6">
+                <label class="block text-sm text-gray-400 mb-2">文件夹名称</label>
+                <input type="text" id="newFolderNameInput" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:border-blue-500" placeholder="请输入文件夹名称">
+                <p class="text-xs text-gray-500 mt-2">当前路径: <span id="newFolderCurrentPath" class="text-blue-400">/</span></p>
+            </div>
+            <footer class="px-6 py-4 border-t border-gray-700 flex justify-end gap-2">
+                <button onclick="closeNewFolderModal()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">取消</button>
+                <button onclick="confirmCreateFolder()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm">
+                    <i class="fas fa-check mr-2"></i>创建
+                </button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- 主容器 -->
+    <div class="flex h-full">
+        <!-- 左侧边栏 - 导航 -->
+        <aside class="w-16 bg-gray-800 flex flex-col items-center py-4 border-r border-gray-700">
+            <button onclick="switchView('chat')" class="nav-btn p-3 rounded-lg mb-2 hover:bg-gray-700 transition" title="AI对话">
+                <i class="fas fa-comments text-xl text-blue-400"></i>
+            </button>
+            <button onclick="switchView('files')" class="nav-btn p-3 rounded-lg mb-2 hover:bg-gray-700 transition" title="文件管理">
+                <i class="fas fa-folder-open text-xl text-yellow-400"></i>
+            </button>
+            <button onclick="showSettings()" class="nav-btn p-3 rounded-lg mt-auto hover:bg-gray-700 transition" title="设置">
+                <i class="fas fa-cog text-xl text-gray-400"></i>
+            </button>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="flex-1 flex overflow-hidden">
+            <!-- AI对话界面 -->
+            <div id="chatView" class="flex-1 flex flex-col">
+                <!-- 聊天头部 -->
+                <header class="bg-gray-800 px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                            <i class="fas fa-robot text-white"></i>
+                        </div>
+                        <div>
+                            <h1 class="font-bold text-lg">AI智能助手</h1>
+                            <p class="text-xs text-gray-400">基于 Qwen3.8</p>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="toggleSelectMode()" id="selectModeBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition">
+                            <i class="fas fa-check-square mr-2"></i>多选
+                        </button>
+                        <button onclick="clearChat()" class="px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm transition">
+                            <i class="fas fa-trash mr-2"></i>清空
+                        </button>
+                    </div>
+                </header>
+
+                <!-- 聊天记录区 -->
+                <div id="chatContainer" class="flex-1 overflow-y-auto p-6 space-y-4">
+                    <!-- 欢迎消息 -->
+                    <div class="message-bubble flex gap-3">
+                        <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex-shrink-0 flex items-center justify-center text-sm">
+                            <i class="fas fa-robot"></i>
+                        </div>
+                        <div class="message-content bg-gray-800 rounded-lg p-4 max-w-3xl">
+                            <p class="text-gray-300">你好！我是你的AI助手。我可以帮你：</p>
+                            <ul class="text-gray-400 text-sm mt-2 space-y-1">
+                                <li>• 回答问题、进行对话</li>
+                                <li>• 总结选中的聊天记录</li>
+                                <li>• 直接保存聊天记录</li>
+                                <li>• 生成文档并保存到本地</li>
+                            </ul>
+                            <p class="text-gray-400 text-sm mt-2">所有数据都保存在你的浏览器本地，换设备不会同步。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 选中操作栏 -->
+                <div id="selectionBar" class="hidden bg-gray-800 px-6 py-3 border-t border-gray-700 flex justify-between items-center">
+                    <span class="text-sm text-gray-400">已选择 <span id="selectedCount">0</span> 条消息</span>
+                    <div class="flex gap-2">
+                        <button onclick="saveSelectedChats()" class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm">
+                            <i class="fas fa-save mr-2"></i>保存记录
+                        </button>
+                        <button onclick="cancelSelection()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">取消</button>
+                        <button onclick="summarizeSelected()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm">
+                            <i class="fas fa-magic mr-2"></i>生成总结
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 输入区 -->
+                <div class="bg-gray-800 p-4 border-t border-gray-700">
+                    <div class="flex gap-3">
+                        <textarea id="userInput" rows="2" placeholder="输入你的问题..." 
+                            class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 resize-none focus:outline-none focus:border-blue-500 transition"
+                            onkeydown="handleKeyDown(event)"></textarea>
+                        <button onclick="sendMessage()" id="sendBtn" class="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-lg transition">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 文件管理界面 -->
+            <div id="filesView" class="hidden flex-1 flex flex-col bg-gray-900">
+                <!-- 文件管理头部 -->
+                <header class="bg-gray-800 px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                    <div class="flex items-center gap-4">
+                        <h2 class="font-bold text-lg"><i class="fas fa-folder-open mr-2 text-yellow-400"></i>文件管理</h2>
+                        <nav id="pathBreadcrumb" class="flex items-center gap-2 text-sm text-gray-400">
+                            <span class="path-breadcrumb" onclick="navigateToRoot()">根目录</span>
+                        </nav>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="file" id="uploadInput" multiple class="hidden" onchange="handleFileUpload(event)">
+                        <button onclick="document.getElementById('uploadInput').click()" class="px-4 py-2 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg text-sm transition">
+                            <i class="fas fa-upload mr-2"></i>上传
+                        </button>
+                        <button onclick="showNewFolderModal()" class="px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded-lg text-sm transition">
+                            <i class="fas fa-folder-plus mr-2"></i>新建文件夹
+                        </button>
+                        <button onclick="exportSelected()" id="exportBtn" class="hidden px-4 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded-lg text-sm transition">
+                            <i class="fas fa-download mr-2"></i>导出
+                        </button>
+                    </div>
+                </header>
+
+                <!-- 文件列表 -->
+                <div id="fileList" class="flex-1 overflow-y-auto p-6">
+                    <!-- 动态生成文件列表 -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 总结编辑弹窗 -->
+    <div id="summaryModal" class="hidden fixed inset-0 bg-black/50 modal-overlay z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <header class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="font-bold text-lg"><i class="fas fa-magic mr-2 text-purple-400"></i>AI总结</h3>
+                <button onclick="closeSummaryModal()" class="text-gray-400 hover:text-white"><i class="fas fa-times text-xl"></i></button>
+            </header>
+            <div class="p-6 overflow-y-auto flex-1">
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">标题</label>
+                    <input type="text" id="summaryTitle" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:border-blue-500">
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">内容 (Markdown格式)</label>
+                    <textarea id="summaryContent" rows="10" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 resize-none focus:outline-none focus:border-blue-500"></textarea>
+                </div>
+            </div>
+            <footer class="px-6 py-4 border-t border-gray-700 flex justify-between">
+                <button onclick="regenerateSummary()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">
+                    <i class="fas fa-redo mr-2"></i>重新生成
+                </button>
+                <div class="flex gap-2">
+                    <button onclick="closeSummaryModal()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">取消</button>
+                    <button onclick="saveSummary()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm">
+                        <i class="fas fa-save mr-2"></i>保存
+                    </button>
+                </div>
+            </footer>
+        </div>
+    </div>
+
+    <!-- 保存路径选择弹窗 -->
+    <div id="savePathModal" class="hidden fixed inset-0 bg-black/50 modal-overlay z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-xl w-full max-w-lg overflow-hidden flex flex-col">
+            <header class="px-6 py-4 border-b border-gray-700">
+                <h3 class="font-bold text-lg"><i class="fas fa-folder mr-2 text-yellow-400"></i>选择保存位置</h3>
+                <p class="text-sm text-gray-400 mt-1">AI建议: <span id="aiSuggestion" class="text-blue-400"></span></p>
+            </header>
+            <div class="p-4 max-h-64 overflow-y-auto" id="savePathList">
+                <!-- 动态生成路径列表 -->
+            </div>
+            <div class="px-6 py-3 border-t border-gray-700 flex gap-2">
+                <input type="text" id="newFolderName" placeholder="新建文件夹名称" class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm">
+                <button onclick="createFolderInModal()" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm">创建</button>
+            </div>
+            <footer class="px-6 py-4 border-t border-gray-700 flex justify-between">
+                <span id="currentSavePath" class="text-sm text-gray-400 truncate max-w-xs"></span>
+                <div class="flex gap-2">
+                    <button onclick="closeSavePathModal()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">取消</button>
+                    <button onclick="confirmSaveWithPath()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm">保存</button>
+                    <button onclick="quickSaveWithAISuggestion()" id="quickSaveBtn" class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm">
+                        <i class="fas fa-bolt mr-2"></i>一键保存
+                    </button>
+                </div>
+            </footer>
+        </div>
+    </div>
+
+    <!-- 文件预览弹窗 -->
+    <div id="previewModal" class="hidden fixed inset-0 bg-black/70 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="bg-gray-800 rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <header class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 id="previewTitle" class="font-bold text-lg"></h3>
+                <div class="flex gap-2">
+                    <button onclick="downloadPreviewFile()" class="px-3 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded text-sm">
+                        <i class="fas fa-download mr-1"></i>下载
+                    </button>
+                    <button onclick="closePreviewModal()" class="text-gray-400 hover:text-white"><i class="fas fa-times text-xl"></i></button>
+                </div>
+            </header>
+            <div id="previewContent" class="flex-1 overflow-auto bg-gray-900 p-4">
+                <!-- 预览内容 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 右键菜单 -->
+    <div id="contextMenu" class="hidden fixed bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 py-2 min-w-40">
+        <button onclick="contextMenuAction('open')" class="w-full text-left px-4 py-2 hover:bg-gray-700 text-sm">
+            <i class="fas fa-eye mr-2 w-4"></i>打开
+        </button>
+        <button onclick="contextMenuAction('rename')" class="w-full text-left px-4 py-2 hover:bg-gray-700 text-sm">
+            <i class="fas fa-edit mr-2 w-4"></i>重命名
+        </button>
+        <button onclick="contextMenuAction('move')" class="w-full text-left px-4 py-2 hover:bg-gray-700 text-sm">
+            <i class="fas fa-arrows-alt mr-2 w-4"></i>移动到
+        </button>
+        <button onclick="contextMenuAction('download')" class="w-full text-left px-4 py-2 hover:bg-gray-700 text-sm">
+            <i class="fas fa-download mr-2 w-4"></i>下载
+        </button>
+        <div class="border-t border-gray-700 my-1"></div>
+        <button onclick="contextMenuAction('delete')" class="w-full text-left px-4 py-2 hover:bg-gray-700 text-red-400 text-sm">
+            <i class="fas fa-trash mr-2 w-4"></i>删除
+        </button>
+    </div>
+
+    <!-- 移动文件弹窗 -->
+    <div id="moveModal" class="hidden fixed inset-0 bg-black/50 modal-overlay z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-xl w-full max-w-md overflow-hidden flex flex-col">
+            <header class="px-6 py-4 border-b border-gray-700">
+                <h3 class="font-bold text-lg">移动到</h3>
+            </header>
+            <div class="p-4 max-h-64 overflow-y-auto" id="movePathList">
+                <!-- 动态生成 -->
+            </div>
+            <footer class="px-6 py-4 border-t border-gray-700 flex justify-end gap-2">
+                <button onclick="closeMoveModal()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">取消</button>
+            </footer>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 配置 ====================
+        const CONFIG = {
+            API_KEY: 'sk-hxwpkscryayzqsecwlkdqgmimmxlgjbxxqioohixtvbutldw',
+            API_URL: 'https://api.siliconflow.cn/v1/chat/completions',
+            MODEL: 'Qwen/Qwen3-8B',
+            DB_NAME: 'AIChatAppDB',
+            DB_VERSION: 2
+        };
+
+        // ==================== 全局状态 ====================
+        let db = null;
+        let currentView = 'chat';
+        let selectMode = false;
+        let selectedMessages = new Set();
+        let chatHistory = [];
+        let currentPath = '/';
+        let currentFileSelection = new Set();
+        let contextMenuTarget = null;
+        let tempSummaryData = null;
+        let aiSuggestedPath = '';
+        let saveMode = 'summary'; // 'summary' or 'chat'
+
+        // ==================== IndexedDB 初始化 ====================
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(CONFIG.DB_NAME, CONFIG.DB_VERSION);
+                
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => {
+                    db = request.result;
+                    resolve(db);
+                };
+                
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    
+                    // 聊天记录存储
+                    if (!db.objectStoreNames.contains('chats')) {
+                        db.createObjectStore('chats', { keyPath: 'id', autoIncrement: true });
+                    }
+                    
+                    // 文件存储
+                    if (!db.objectStoreNames.contains('files')) {
+                        const fileStore = db.createObjectStore('files', { keyPath: 'id', autoIncrement: true });
+                        fileStore.createIndex('path', 'path', { unique: false });
+                        fileStore.createIndex('parentPath', 'parentPath', { unique: false });
+                    }
+                    
+                    // 总结文档存储
+                    if (!db.objectStoreNames.contains('summaries')) {
+                        db.createObjectStore('summaries', { keyPath: 'id', autoIncrement: true });
+                    }
+                };
+            });
+        }
+
+        // ==================== 聊天记录操作 ====================
+        async function saveChatMessage(role, content) {
+            const message = {
+                role,
+                content,
+                timestamp: Date.now()
+            };
+            
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['chats'], 'readwrite');
+                const store = transaction.objectStore('chats');
+                const request = store.add(message);
+                
+                request.onsuccess = () => {
+                    message.id = request.result;
+                    chatHistory.push(message);
+                    resolve(message);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function loadChatHistory() {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['chats'], 'readonly');
+                const store = transaction.objectStore('chats');
+                const request = store.getAll();
+                
+                request.onsuccess = () => {
+                    chatHistory = request.result;
+                    resolve(chatHistory);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function clearChatHistory() {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['chats'], 'readwrite');
+                const store = transaction.objectStore('chats');
+                const request = store.clear();
+                
+                request.onsuccess = () => {
+                    chatHistory = [];
+                    resolve();
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // ==================== 文件系统操作 ====================
+        async function saveFile(name, content, type, parentPath = '/') {
+            const file = {
+                name,
+                content,
+                type,
+                path: parentPath === '/' ? `/${name}` : `${parentPath}/${name}`,
+                parentPath,
+                size: content ? (content.length || content.byteLength || 0) : 0,
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            };
+            
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['files'], 'readwrite');
+                const store = transaction.objectStore('files');
+                const request = store.add(file);
+                
+                request.onsuccess = () => {
+                    file.id = request.result;
+                    resolve(file);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function getFilesByPath(parentPath = '/') {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['files'], 'readonly');
+                const store = transaction.objectStore('files');
+                const index = store.index('parentPath');
+                const request = index.getAll(parentPath);
+                
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function deleteFile(id) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['files'], 'readwrite');
+                const store = transaction.objectStore('files');
+                const request = store.delete(id);
+                
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function updateFile(file) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['files'], 'readwrite');
+                const store = transaction.objectStore('files');
+                file.updatedAt = Date.now();
+                const request = store.put(file);
+                
+                request.onsuccess = () => resolve(file);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function getAllFolders() {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['files'], 'readonly');
+                const store = transaction.objectStore('files');
+                const request = store.getAll();
+                
+                request.onsuccess = () => {
+                    const folders = request.result.filter(f => f.type === 'folder');
+                    resolve(folders);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // ==================== AI API 调用 ====================
+        async function callAI(messages) {
+            const response = await fetch(CONFIG.API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${CONFIG.API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: CONFIG.MODEL,
+                    messages: messages,
+                    stream: false
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`API错误: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            return data.choices[0].message.content;
+        }
+
+        // ==================== UI 渲染 ====================
+        function renderChatMessage(message, index) {
+            const isUser = message.role === 'user';
+            const isSelected = selectedMessages.has(message.id);
+            
+            return `
+                <div class="message-bubble flex gap-3 ${isSelected ? 'selected-message' : ''}" data-id="${message.id}">
+                    ${selectMode ? `
+                        <input type="checkbox" class="chat-message-checkbox mt-2 w-5 h-5 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500" 
+                            ${isSelected ? 'checked' : ''} 
+                            onchange="toggleMessageSelection(${message.id})"
+                            data-id="${message.id}">
+                    ` : ''}
+                    <div class="w-8 h-8 rounded-full ${isUser ? 'bg-blue-600' : 'bg-gradient-to-br from-blue-500 to-purple-600'} flex-shrink-0 flex items-center justify-center text-sm">
+                        <i class="fas ${isUser ? 'fa-user' : 'fa-robot'}"></i>
+                    </div>
+                    <div class="message-content bg-gray-800 rounded-lg p-4 max-w-3xl ${isSelected ? 'ring-2 ring-blue-500' : ''}">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="font-semibold ${isUser ? 'text-blue-400' : 'text-purple-400'}">${isUser ? '你' : 'AI'}</span>
+                            <span class="text-xs text-gray-500">${new Date(message.timestamp).toLocaleString()}</span>
+                        </div>
+                        <div class="text-gray-300 prose prose-invert max-w-none">${marked.parse(message.content)}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function renderFileList() {
+            const files = await getFilesByPath(currentPath);
+            const container = document.getElementById('fileList');
+            
+            if (files.length === 0 && currentPath === '/') {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-20">
+                        <i class="fas fa-folder-open text-6xl mb-4 opacity-30"></i>
+                        <p>文件夹为空</p>
+                        <p class="text-sm mt-2">点击"上传"或"新建文件夹"开始管理文件</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // 文件夹在前，文件在后
+            files.sort((a, b) => {
+                if (a.type === 'folder' && b.type !== 'folder') return -1;
+                if (a.type !== 'folder' && b.type === 'folder') return 1;
+                return b.updatedAt - a.updatedAt;
+            });
+            
+            container.innerHTML = `
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    ${files.map(file => `
+                        <div class="file-item ${currentFileSelection.has(file.id) ? 'selected' : ''} p-4 rounded-lg cursor-pointer transition group"
+                             onclick="handleFileClick(event, ${file.id})"
+                             oncontextmenu="showContextMenu(event, ${file.id})"
+                             data-id="${file.id}">
+                            <div class="text-center">
+                                <i class="fas ${getFileIcon(file)} text-4xl mb-3 ${file.type === 'folder' ? 'text-yellow-400' : 'text-blue-400'}"></i>
+                                <p class="text-sm truncate" title="${file.name}">${file.name}</p>
+                                <p class="text-xs text-gray-500 mt-1">${formatFileSize(file.size)}</p>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            updateBreadcrumb();
+        }
+
+        function getFileIcon(file) {
+            if (file.type === 'folder') return 'fa-folder';
+            const ext = file.name.split('.').pop().toLowerCase();
+            const iconMap = {
+                'docx': 'fa-file-word',
+                'doc': 'fa-file-word',
+                'pdf': 'fa-file-pdf',
+                'txt': 'fa-file-alt',
+                'md': 'fa-file-code',
+                'markdown': 'fa-file-code',
+                'pptx': 'fa-file-powerpoint',
+                'ppt': 'fa-file-powerpoint',
+                'jpg': 'fa-file-image',
+                'jpeg': 'fa-file-image',
+                'png': 'fa-file-image',
+                'gif': 'fa-file-image',
+                'webp': 'fa-file-image',
+                'svg': 'fa-file-image',
+                'bmp': 'fa-file-image',
+                'ico': 'fa-file-image'
+            };
+            return iconMap[ext] || 'fa-file';
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function updateBreadcrumb() {
+            const parts = currentPath.split('/').filter(p => p);
+            let html = '<span class="path-breadcrumb" onclick="navigateToRoot()">根目录</span>';
+            let path = '';
+            
+            parts.forEach((part, index) => {
+                path += '/' + part;
+                html += ` <span class="text-gray-600">/</span> <span class="path-breadcrumb" onclick="navigateToPath('${path}')">${part}</span>`;
+            });
+            
+            document.getElementById('pathBreadcrumb').innerHTML = html;
+        }
+
+        // ==================== 事件处理 ====================
+        async function sendMessage() {
+            const input = document.getElementById('userInput');
+            const content = input.value.trim();
+            if (!content) return;
+            
+            input.value = '';
+            document.getElementById('sendBtn').disabled = true;
+            document.getElementById('sendBtn').innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            
+            // 保存用户消息
+            const userMsg = await saveChatMessage('user', content);
+            appendMessageToChat(userMsg);
+            
+            // 显示AI正在输入
+            showTypingIndicator();
+            
+            try {
+                // 调用AI
+                const messages = [
+                    { role: 'system', content: '你是一个 helpful 的AI助手。' },
+                    ...chatHistory.slice(-10).map(m => ({ role: m.role, content: m.content }))
+                ];
+                
+                const aiResponse = await callAI(messages);
+                
+                hideTypingIndicator();
+                
+                // 保存AI回复
+                const aiMsg = await saveChatMessage('assistant', aiResponse);
+                appendMessageToChat(aiMsg);
+                
+            } catch (error) {
+                hideTypingIndicator();
+                showError('AI响应失败: ' + error.message);
+            }
+            
+            document.getElementById('sendBtn').disabled = false;
+            document.getElementById('sendBtn').innerHTML = '<i class="fas fa-paper-plane"></i>';
+        }
+
+        function appendMessageToChat(message) {
+            const container = document.getElementById('chatContainer');
+            const html = renderChatMessage(message, chatHistory.length - 1);
+            container.insertAdjacentHTML('beforeend', html);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function showTypingIndicator() {
+            const container = document.getElementById('chatContainer');
+            container.insertAdjacentHTML('beforeend', `
+                <div id="typingIndicator" class="message-bubble flex gap-3">
+                    <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex-shrink-0 flex items-center justify-center text-sm">
+                        <i class="fas fa-robot"></i>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-4">
+                        <span class="typing-indicator text-gray-400">AI正在思考</span>
+                    </div>
+                </div>
+            `);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function hideTypingIndicator() {
+            const indicator = document.getElementById('typingIndicator');
+            if (indicator) indicator.remove();
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function toggleSelectMode() {
+            selectMode = !selectMode;
+            selectedMessages.clear();
+            
+            const btn = document.getElementById('selectModeBtn');
+            const bar = document.getElementById('selectionBar');
+            
+            if (selectMode) {
+                btn.classList.add('bg-blue-600', 'text-white');
+                btn.classList.remove('bg-gray-700');
+                bar.classList.remove('hidden');
+            } else {
+                btn.classList.remove('bg-blue-600', 'text-white');
+                btn.classList.add('bg-gray-700');
+                bar.classList.add('hidden');
+            }
+            
+            refreshChatDisplay();
+        }
+
+        function toggleMessageSelection(id) {
+            if (selectedMessages.has(id)) {
+                selectedMessages.delete(id);
+            } else {
+                selectedMessages.add(id);
+            }
+            updateSelectionCount();
+            refreshChatDisplay();
+        }
+
+        function updateSelectionCount() {
+            document.getElementById('selectedCount').textContent = selectedMessages.size;
+        }
+
+        function cancelSelection() {
+            selectedMessages.clear();
+            toggleSelectMode();
+        }
+
+        async function refreshChatDisplay() {
+            const container = document.getElementById('chatContainer');
+            container.innerHTML = `
+                <div class="message-bubble flex gap-3">
+                    <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex-shrink-0 flex items-center justify-center text-sm">
+                        <i class="fas fa-robot"></i>
+                    </div>
+                    <div class="message-content bg-gray-800 rounded-lg p-4 max-w-3xl">
+                        <p class="text-gray-300">你好！我是你的AI助手。我可以帮你：</p>
+                        <ul class="text-gray-400 text-sm mt-2 space-y-1">
+                            <li>• 回答问题、进行对话</li>
+                            <li>• 总结选中的聊天记录</li>
+                            <li>• 直接保存聊天记录</li>
+                            <li>• 生成文档并保存到本地</li>
+                        </ul>
+                        <p class="text-gray-400 text-sm mt-2">所有数据都保存在你的浏览器本地，换设备不会同步。</p>
+                    </div>
+                </div>
+            `;
+            
+            for (const msg of chatHistory) {
+                container.insertAdjacentHTML('beforeend', renderChatMessage(msg));
+            }
+            
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function clearChat() {
+            if (!confirm('确定要清空所有聊天记录吗？')) return;
+            await clearChatHistory();
+            refreshChatDisplay();
+        }
+
+        // ==================== 保存聊天记录功能 ====================
+        async function saveSelectedChats() {
+            if (selectedMessages.size === 0) {
+                showError('请先选择要保存的聊天记录');
+                return;
+            }
+            
+            saveMode = 'chat';
+            
+            const selected = chatHistory.filter(m => selectedMessages.has(m.id));
+            const content = selected.map(m => {
+                const role = m.role === 'user' ? '用户' : 'AI';
+                return `**${role}** (${new Date(m.timestamp).toLocaleString()})\n\n${m.content}`;
+            }).join('\n\n---\n\n');
+            
+            tempSummaryData = {
+                title: `聊天记录 - ${new Date().toLocaleString()}`,
+                content: content,
+                sourceMessages: Array.from(selectedMessages)
+            };
+            
+            // 获取AI建议的保存路径
+            await getAISavePathSuggestionForChat();
+            
+            // 显示保存路径选择弹窗
+            showSavePathModal();
+        }
+
+        async function getAISavePathSuggestionForChat() {
+            try {
+                const folders = await getAllFolders();
+                const folderList = folders.map(f => f.path).join('\n') || '/ (根目录)';
+                
+                const prompt = `基于以下文件夹结构和聊天记录内容，建议一个最合适的保存路径。只返回路径，不要解释。\n\n现有文件夹：\n${folderList}`;
+                
+                const suggestion = await callAI([
+                    { role: 'system', content: '你是一个文件管理助手，擅长分类整理。' },
+                    { role: 'user', content: prompt }
+                ]);
+                
+                aiSuggestedPath = suggestion.trim();
+                document.getElementById('aiSuggestion').textContent = aiSuggestedPath;
+                
+            } catch (error) {
+                aiSuggestedPath = '/';
+                document.getElementById('aiSuggestion').textContent = '/ (根目录)';
+            }
+        }
+
+        // ==================== 总结功能 ====================
+        async function summarizeSelected() {
+            if (selectedMessages.size === 0) {
+                showError('请先选择要总结的聊天记录');
+                return;
+            }
+            
+            saveMode = 'summary';
+            
+            const selected = chatHistory.filter(m => selectedMessages.has(m.id));
+            const content = selected.map(m => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`).join('\n\n');
+            
+            showTypingIndicator();
+            
+            try {
+                const prompt = `请对以下聊天记录进行总结，提炼关键信息和要点，以Markdown格式输出：\n\n${content}`;
+                const summary = await callAI([
+                    { role: 'system', content: '你是一个专业的对话总结助手，擅长提炼关键信息。请以Markdown格式输出总结内容。' },
+                    { role: 'user', content: prompt }
+                ]);
+                
+                hideTypingIndicator();
+                
+                tempSummaryData = {
+                    title: `聊天记录总结 - ${new Date().toLocaleString()}`,
+                    content: summary,
+                    sourceMessages: Array.from(selectedMessages)
+                };
+                
+                document.getElementById('summaryTitle').value = tempSummaryData.title;
+                document.getElementById('summaryContent').value = summary;
+                document.getElementById('summaryModal').classList.remove('hidden');
+                
+            } catch (error) {
+                hideTypingIndicator();
+                showError('生成总结失败: ' + error.message);
+            }
+        }
+
+        function closeSummaryModal() {
+            document.getElementById('summaryModal').classList.add('hidden');
+            tempSummaryData = null;
+        }
+
+        async function regenerateSummary() {
+            const content = document.getElementById('summaryContent').value;
+            const title = document.getElementById('summaryTitle').value;
+            
+            tempSummaryData.title = title;
+            tempSummaryData.content = content;
+            
+            showTypingIndicator();
+            
+            try {
+                const prompt = `请基于以下内容重新生成一个更好的总结版本，要求更加简洁明了，以Markdown格式输出：\n\n${content}`;
+                const newSummary = await callAI([
+                    { role: 'system', content: '你是一个专业的对话总结助手，擅长提炼关键信息。请以Markdown格式输出总结内容。' },
+                    { role: 'user', content: prompt }
+                ]);
+                
+                hideTypingIndicator();
+                document.getElementById('summaryContent').value = newSummary;
+                tempSummaryData.content = newSummary;
+                
+            } catch (error) {
+                hideTypingIndicator();
+                showError('重新生成失败: ' + error.message);
+            }
+        }
+
+        async function saveSummary() {
+            const title = document.getElementById('summaryTitle').value;
+            const content = document.getElementById('summaryContent').value;
+            
+            if (!title || !content) {
+                showError('标题和内容不能为空');
+                return;
+            }
+            
+            tempSummaryData.title = title;
+            tempSummaryData.content = content;
+            
+            closeSummaryModal();
+            
+            // 获取AI建议的保存路径
+            await getAISavePathSuggestion();
+            
+            // 显示保存路径选择弹窗
+            showSavePathModal();
+        }
+
+        async function getAISavePathSuggestion() {
+            try {
+                const folders = await getAllFolders();
+                const folderList = folders.map(f => f.path).join('\n') || '/ (根目录)';
+                
+                const prompt = `基于以下文件夹结构和总结标题"${tempSummaryData.title}"，建议一个最合适的保存路径。只返回路径，不要解释。\n\n现有文件夹：\n${folderList}`;
+                
+                const suggestion = await callAI([
+                    { role: 'system', content: '你是一个文件管理助手，擅长分类整理。' },
+                    { role: 'user', content: prompt }
+                ]);
+                
+                aiSuggestedPath = suggestion.trim();
+                document.getElementById('aiSuggestion').textContent = aiSuggestedPath;
+                
+            } catch (error) {
+                aiSuggestedPath = '/';
+                document.getElementById('aiSuggestion').textContent = '/ (根目录)';
+            }
+        }
+
+        // ==================== 保存路径选择 ====================
+        async function showSavePathModal() {
+            const folders = await getAllFolders();
+            const list = document.getElementById('savePathList');
+            
+            list.innerHTML = `
+                <div class="space-y-1">
+                    <div class="path-option p-3 rounded-lg cursor-pointer hover:bg-gray-700 ${currentPath === '/' ? 'bg-gray-700' : ''}" 
+                         onclick="selectSavePath('/')">
+                        <i class="fas fa-folder text-yellow-400 mr-2"></i>根目录
+                    </div>
+                    ${folders.map(f => `
+                        <div class="path-option p-3 rounded-lg cursor-pointer hover:bg-gray-700 ${currentPath === f.path ? 'bg-gray-700' : ''}" 
+                             onclick="selectSavePath('${f.path}')"
+                             style="padding-left: ${20 + (f.path.split('/').length - 1) * 20}px">
+                            <i class="fas fa-folder text-yellow-400 mr-2"></i>${f.name}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            document.getElementById('currentSavePath').textContent = '当前: ' + currentPath;
+            document.getElementById('savePathModal').classList.remove('hidden');
+        }
+
+        function selectSavePath(path) {
+            currentPath = path;
+            document.getElementById('currentSavePath').textContent = '当前: ' + path;
+            
+            // 更新选中状态
+            document.querySelectorAll('.path-option').forEach(el => {
+                el.classList.remove('bg-gray-700');
+            });
+            event.currentTarget.classList.add('bg-gray-700');
+        }
+
+        function closeSavePathModal() {
+            document.getElementById('savePathModal').classList.add('hidden');
+        }
+
+        async function createFolderInModal() {
+            const name = document.getElementById('newFolderName').value.trim();
+            if (!name) return;
+            
+            await saveFile(name, null, 'folder', currentPath);
+            document.getElementById('newFolderName').value = '';
+            showSavePathModal(); // 刷新列表
+        }
+
+        async function confirmSaveWithPath() {
+            await doSave(currentPath);
+            closeSavePathModal();
+        }
+
+        async function quickSaveWithAISuggestion() {
+            // 确保建议的路径存在
+            if (aiSuggestedPath !== '/' && aiSuggestedPath !== currentPath) {
+                // 检查路径是否存在，不存在则创建
+                const parts = aiSuggestedPath.split('/').filter(p => p);
+                let current = '/';
+                for (const part of parts) {
+                    const files = await getFilesByPath(current);
+                    const exists = files.find(f => f.name === part && f.type === 'folder');
+                    if (!exists) {
+                        await saveFile(part, null, 'folder', current);
+                    }
+                    current = current === '/' ? `/${part}` : `${current}/${part}`;
+                }
+            }
+            
+            await doSave(aiSuggestedPath);
+            closeSavePathModal();
+        }
+
+        async function doSave(savePath) {
+            try {
+                // 生成Markdown内容
+                let fileContent;
+                let fileName;
+                
+                if (saveMode === 'summary') {
+                    // 总结模式 - 保存为Markdown
+                    fileContent = `# ${tempSummaryData.title}\n\n> 生成时间: ${new Date().toLocaleString()}\n\n---\n\n${tempSummaryData.content}`;
+                    fileName = tempSummaryData.title.replace(/[^\w\u4e00-\u9fa5\-. ]/g, '_') + '.md';
+                } else {
+                    // 聊天记录模式 - 保存为Markdown
+                    fileContent = tempSummaryData.content;
+                    fileName = tempSummaryData.title.replace(/[^\w\u4e00-\u9fa5\-. ]/g, '_') + '.md';
+                }
+                
+                // 保存为文件
+                await saveFile(fileName, fileContent, 'md', savePath);
+                
+                showSuccess('已保存到: ' + savePath + '/' + fileName);
+                
+                // 清除选中状态
+                selectedMessages.clear();
+                toggleSelectMode();
+                
+            } catch (error) {
+                showError('保存失败: ' + error.message);
+            }
+        }
+
+        // ==================== 文件管理 ====================
+        function handleFileClick(event, id) {
+            if (event.ctrlKey || event.metaKey) {
+                // 多选
+                if (currentFileSelection.has(id)) {
+                    currentFileSelection.delete(id);
+                } else {
+                    currentFileSelection.add(id);
+                }
+                renderFileList();
+                updateExportButton();
+            } else {
+                // 打开文件/文件夹
+                openFileOrFolder(id);
+            }
+        }
+
+        async function openFileOrFolder(id) {
+            const transaction = db.transaction(['files'], 'readonly');
+            const store = transaction.objectStore('files');
+            const request = store.get(id);
+            
+            request.onsuccess = () => {
+                const file = request.result;
+                if (file.type === 'folder') {
+                    currentPath = file.path;
+                    renderFileList();
+                } else {
+                    previewFile(file);
+                }
+            };
+        }
+
+        function navigateToRoot() {
+            currentPath = '/';
+            renderFileList();
+        }
+
+        function navigateToPath(path) {
+            currentPath = path;
+            renderFileList();
+        }
+
+        // ==================== 新建文件夹功能（已修复）====================
+        function showNewFolderModal() {
+            document.getElementById('newFolderCurrentPath').textContent = currentPath;
+            document.getElementById('newFolderNameInput').value = '';
+            document.getElementById('newFolderModal').classList.remove('hidden');
+            document.getElementById('newFolderNameInput').focus();
+        }
+
+        function closeNewFolderModal() {
+            document.getElementById('newFolderModal').classList.add('hidden');
+        }
+
+        async function confirmCreateFolder() {
+            const name = document.getElementById('newFolderNameInput').value.trim();
+            if (!name) {
+                showError('请输入文件夹名称');
+                return;
+            }
+            
+            await saveFile(name, null, 'folder', currentPath);
+            closeNewFolderModal();
+            renderFileList();
+            showSuccess('文件夹 "' + name + '" 创建成功');
+        }
+
+        // 保留旧的函数以兼容（改为使用新的模态框）
+        async function createNewFolder() {
+            showNewFolderModal();
+        }
+
+        async function handleFileUpload(event) {
+            const files = event.target.files;
+            
+            for (const file of files) {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const content = e.target.result;
+                    // 检测文件类型
+                    let fileType = 'file';
+                    if (file.type.startsWith('image/')) {
+                        fileType = 'image';
+                    }
+                    await saveFile(file.name, content, fileType, currentPath);
+                    renderFileList();
+                };
+                reader.readAsArrayBuffer(file);
+            }
+            
+            event.target.value = '';
+            showSuccess('文件上传成功');
+        }
+
+        // ==================== 右键菜单 ====================
+        function showContextMenu(event, id) {
+            event.preventDefault();
+            contextMenuTarget = id;
+            
+            const menu = document.getElementById('contextMenu');
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+            menu.classList.remove('hidden');
+        }
+
+        document.addEventListener('click', () => {
+            document.getElementById('contextMenu').classList.add('hidden');
+        });
+
+        async function contextMenuAction(action) {
+            if (!contextMenuTarget) return;
+            
+            const transaction = db.transaction(['files'], 'readonly');
+            const store = transaction.objectStore('files');
+            const request = store.get(contextMenuTarget);
+            
+            request.onsuccess = async () => {
+                const file = request.result;
+                
+                switch (action) {
+                    case 'open':
+                        if (file.type === 'folder') {
+                            currentPath = file.path;
+                            renderFileList();
+                        } else {
+                            previewFile(file);
+                        }
+                        break;
+                    case 'rename':
+                        const newName = prompt('新名称:', file.name);
+                        if (newName && newName !== file.name) {
+                            file.name = newName;
+                            // 更新路径
+                            file.path = file.parentPath === '/' ? `/${newName}` : `${file.parentPath}/${newName}`;
+                            await updateFile(file);
+                            renderFileList();
+                        }
+                        break;
+                    case 'move':
+                        showMoveModal(file);
+                        break;
+                    case 'download':
+                        downloadFile(file);
+                        break;
+                    case 'delete':
+                        if (confirm(`确定要删除 "${file.name}" 吗?`)) {
+                            await deleteFile(file.id);
+                            renderFileList();
+                            showSuccess('删除成功');
+                        }
+                        break;
+                }
+            };
+        }
+
+        // ==================== 文件预览（支持图片）====================
+        async function previewFile(file) {
+            const modal = document.getElementById('previewModal');
+            const title = document.getElementById('previewTitle');
+            const content = document.getElementById('previewContent');
+            
+            title.textContent = file.name;
+            modal.dataset.fileId = file.id;
+            
+            const ext = file.name.split('.').pop().toLowerCase();
+            
+            // 图片格式列表
+            const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'tiff', 'tif'];
+            
+            try {
+                // 处理图片文件
+                if (imageExtensions.includes(ext) || file.type === 'image') {
+                    let imageData;
+                    if (file.content instanceof ArrayBuffer) {
+                        const blob = new Blob([file.content]);
+                        imageData = URL.createObjectURL(blob);
+                    } else if (typeof file.content === 'string' && file.content.startsWith('data:')) {
+                        imageData = file.content;
+                    }
+                    
+                    if (imageData) {
+                        content.innerHTML = `<div class="image-preview-container"><img src="${imageData}" alt="${file.name}"></div>`;
+                        modal.classList.remove('hidden');
+                        return;
+                    }
+                }
+                
+                // 处理其他文件格式
+                switch (ext) {
+                    case 'md':
+                    case 'markdown':
+                        const decoder = new TextDecoder('utf-8');
+                        const mdText = decoder.decode(file.content);
+                        content.innerHTML = `<div class="preview-container">${marked.parse(mdText)}</div>`;
+                        break;
+                    case 'txt':
+                        const txtDecoder = new TextDecoder('utf-8');
+                        const txtContent = txtDecoder.decode(file.content);
+                        content.innerHTML = `<div class="preview-container"><pre>${escapeHtml(txtContent)}</pre></div>`;
+                        break;
+                    case 'docx':
+                    case 'doc':
+                        const arrayBuffer = file.content;
+                        const result = await mammoth.convertToHtml({ arrayBuffer });
+                        content.innerHTML = `<div class="preview-container">${result.value}</div>`;
+                        break;
+                    case 'pdf':
+                        content.innerHTML = '<div class="text-center p-10 text-gray-400">PDF预览需要额外配置，请下载后查看</div>';
+                        break;
+                    default:
+                        content.innerHTML = '<div class="text-center p-10 text-gray-400">该文件类型暂不支持预览，请下载后查看</div>';
+                }
+            } catch (error) {
+                content.innerHTML = `<div class="text-center p-10 text-red-400">预览失败: ${error.message}</div>`;
+            }
+            
+            modal.classList.remove('hidden');
+        }
+
+        function closePreviewModal() {
+            document.getElementById('previewModal').classList.add('hidden');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ==================== 移动文件 ====================
+        async function showMoveModal(file) {
+            const folders = await getAllFolders();
+            const list = document.getElementById('movePathList');
+            
+            list.innerHTML = `
+                <div class="space-y-1">
+                    <div class="move-path-option p-3 rounded-lg cursor-pointer hover:bg-gray-700" 
+                         onclick="executeMove('${file.id}', '/')">
+                        <i class="fas fa-folder text-yellow-400 mr-2"></i>根目录
+                    </div>
+                    ${folders.filter(f => f.path !== file.path && !f.path.startsWith(file.path + '/')).map(f => `
+                        <div class="move-path-option p-3 rounded-lg cursor-pointer hover:bg-gray-700" 
+                             onclick="executeMove('${file.id}', '${f.path}')"
+                             style="padding-left: ${20 + (f.path.split('/').length - 1) * 20}px">
+                            <i class="fas fa-folder text-yellow-400 mr-2"></i>${f.name}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            document.getElementById('moveModal').classList.remove('hidden');
+        }
+
+        function closeMoveModal() {
+            document.getElementById('moveModal').classList.add('hidden');
+        }
+
+        async function executeMove(fileId, newParentPath) {
+            const transaction = db.transaction(['files'], 'readwrite');
+            const store = transaction.objectStore('files');
+            const request = store.get(parseInt(fileId));
+            
+            request.onsuccess = async () => {
+                const file = request.result;
+                file.parentPath = newParentPath;
+                file.path = newParentPath === '/' ? `/${file.name}` : `${newParentPath}/${file.name}`;
+                
+                await updateFile(file);
+                closeMoveModal();
+                renderFileList();
+                showSuccess('移动成功');
+            };
+        }
+
+        // ==================== 下载导出 ====================
+        function downloadFile(file) {
+            let blob;
+            const ext = file.name.split('.').pop().toLowerCase();
+            
+            // 图片格式
+            const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'];
+            if (imageExtensions.includes(ext)) {
+                if (file.content instanceof ArrayBuffer) {
+                    const mimeType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 
+                                   ext === 'png' ? 'image/png' :
+                                   ext === 'gif' ? 'image/gif' :
+                                   ext === 'webp' ? 'image/webp' :
+                                   ext === 'svg' ? 'image/svg+xml' : 'image/png';
+                    blob = new Blob([file.content], { type: mimeType });
+                } else if (typeof file.content === 'string' && file.content.startsWith('data:')) {
+                    // 如果是base64，直接下载
+                    const link = document.createElement('a');
+                    link.href = file.content;
+                    link.download = file.name;
+                    link.click();
+                    return;
+                }
+            } else if (file.content instanceof ArrayBuffer) {
+                blob = new Blob([file.content]);
+            } else if (typeof file.content === 'string') {
+                blob = new Blob([file.content], { type: 'text/plain' });
+            } else {
+                blob = new Blob([JSON.stringify(file.content)]);
+            }
+            
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadPreviewFile() {
+            const fileId = document.getElementById('previewModal').dataset.fileId;
+            const transaction = db.transaction(['files'], 'readonly');
+            const store = transaction.objectStore('files');
+            const request = store.get(parseInt(fileId));
+            
+            request.onsuccess = () => {
+                if (request.result) {
+                    downloadFile(request.result);
+                }
+            };
+        }
+
+        async function exportSelected() {
+            if (currentFileSelection.size === 0) return;
+            
+            const zip = new JSZip();
+            const transaction = db.transaction(['files'], 'readonly');
+            const store = transaction.objectStore('files');
+            
+            for (const id of currentFileSelection) {
+                const request = store.get(id);
+                await new Promise((resolve) => {
+                    request.onsuccess = () => {
+                        const file = request.result;
+                        if (file) {
+                            if (file.content instanceof ArrayBuffer) {
+                                zip.file(file.name, file.content);
+                            } else if (typeof file.content === 'string') {
+                                zip.file(file.name, file.content);
+                            } else {
+                                zip.file(file.name, JSON.stringify(file.content));
+                            }
+                        }
+                        resolve();
+                    };
+                });
+            }
+            
+            const content = await zip.generateAsync({ type: 'blob' });
+            const url = URL.createObjectURL(content);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `导出文件_${new Date().toISOString().slice(0, 10)}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            currentFileSelection.clear();
+            renderFileList();
+            updateExportButton();
+            showSuccess('导出成功');
+        }
+
+        function updateExportButton() {
+            const btn = document.getElementById('exportBtn');
+            if (currentFileSelection.size > 0) {
+                btn.classList.remove('hidden');
+                btn.innerHTML = `<i class="fas fa-download mr-2"></i>导出 (${currentFileSelection.size})`;
+            } else {
+                btn.classList.add('hidden');
+            }
+        }
+
+        // ==================== 视图切换 ====================
+        function switchView(view) {
+            currentView = view;
+            
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('bg-gray-700');
+            });
+            
+            if (view === 'chat') {
+                document.getElementById('chatView').classList.remove('hidden');
+                document.getElementById('filesView').classList.add('hidden');
+            } else {
+                document.getElementById('chatView').classList.add('hidden');
+                document.getElementById('filesView').classList.remove('hidden');
+                renderFileList();
+            }
+        }
+
+        function showSettings() {
+            alert('设置功能开发中...\n\n当前配置:\n• AI模型: Qwen3.8\n• 存储: 浏览器本地IndexedDB\n• API: 硅基流动');
+        }
+
+        // ==================== 工具函数 ====================
+        function showError(message) {
+            alert('❌ ' + message);
+        }
+
+        function showSuccess(message) {
+            alert('✅ ' + message);
+        }
+
+        // ==================== 初始化 ====================
+        async function init() {
+            try {
+                await initDB();
+                await loadChatHistory();
+                await refreshChatDisplay();
+                console.log('应用初始化完成');
+            } catch (error) {
+                console.error('初始化失败:', error);
+                showError('应用初始化失败: ' + error.message);
+            }
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', init);
+
+        // 回车键创建文件夹
+        document.getElementById('newFolderNameInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                confirmCreateFolder();
+            }
+        });
+    </script>
+</body>
+</html>
